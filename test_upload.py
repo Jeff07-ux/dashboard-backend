@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 import sys
 
-url = 'https://dashboard-backend-livid.vercel.app/'
+url = 'http://localhost:8000/api/upload'
 file_path = 'C:/Users/pc/Desktop/fichier.xlsx'
 
 with open(file_path, 'rb') as f:

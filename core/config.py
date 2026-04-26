@@ -5,8 +5,8 @@ class Settings(BaseSettings):
     # Column Header Configuration
     COL_CABLE_NAME: str = "Cable name"
     COL_PHASE: str = "phase"
-    COL_TS: str = "TS"
-    COL_TO: str = "TO"
+    COL_TS: str = "Temps passé"
+    COL_TO: str = "Temps Takt"
     
     # CORS Origins
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
