@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     COL_PHASE: str = "phase"
     COL_TS: str = "Temps passé"
     COL_TO: str = "Temps Takt"
+    COL_TA: str = "Temps alloué"
     
     # CORS Origins
     BACKEND_CORS_ORIGINS: list[str] = ["*"]

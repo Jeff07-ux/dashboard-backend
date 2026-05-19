@@ -2,9 +2,38 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
+import re
+import unicodedata
 from core.config import settings
 
 app = FastAPI(title=settings.PROJECT_NAME)
+
+
+def normalize_header_value(value: str) -> str:
+    if not isinstance(value, str):
+        value = str(value)
+    normalized = unicodedata.normalize('NFKD', value)
+    normalized = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.lower()
+    normalized = re.sub(r'[\(\)\[\]\{\}]', '', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
+
+def match_column(actual: str, target: str) -> bool:
+    actual_norm = normalize_header_value(actual)
+    target_norm = normalize_header_value(target)
+    return target_norm in actual_norm or actual_norm in target_norm
+
+
+def map_dataframe_columns(df: pd.DataFrame, required_cols: list[str]) -> pd.DataFrame:
+    mapping = {}
+    for actual in df.columns:
+        for target in required_cols:
+            if match_column(actual, target):
+                mapping[actual] = target
+                break
+    return df.rename(columns=mapping)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,14 +68,15 @@ async def upload_file(file: UploadFile = File(...)):
             settings.COL_CABLE_NAME,
             settings.COL_PHASE,
             settings.COL_TS,
-            settings.COL_TO
+            settings.COL_TO,
+            settings.COL_TA
         ]
         
         # Find the row that contains our required headers
         header_row_index = -1
         for i in range(min(50, len(raw_df))): # check first 50 rows
             row_values = raw_df.iloc[i].astype(str).tolist()
-            if all(col in row_values for col in required_cols):
+            if all(any(match_column(cell, col) for cell in row_values) for col in required_cols):
                 header_row_index = i
                 break
                 
@@ -63,21 +93,33 @@ async def upload_file(file: UploadFile = File(...)):
         else:
             df = pd.read_excel(contents_io, header=header_row_index)
 
-        # Step 1: Average TS for repeated Cable + Phase
+        df = map_dataframe_columns(df, required_cols)
+        missing_columns = [col for col in required_cols if col not in df.columns]
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not map required columns after reading header row. Missing: {', '.join(missing_columns)}"
+            )
+
+        # Step 1: Aggregate times for repeated Cable + Phase
         df_grouped = df.groupby([settings.COL_CABLE_NAME, settings.COL_PHASE], as_index=False).agg({
             settings.COL_TS: "mean",
-            settings.COL_TO: "first"
+            settings.COL_TO: "mean",
+            settings.COL_TA: "mean"
         })
         
-        # Step 2: Phase Performance
-        df_grouped["Performance (%)"] = (df_grouped[settings.COL_TO] / df_grouped[settings.COL_TS]) * 100
+        # Step 2: Phase KPI calculations
+        df_grouped["Taux d'adhérence (%)"] = (df_grouped[settings.COL_TO] / df_grouped[settings.COL_TS]) * 100
+        df_grouped["Rendement (%)"] = (df_grouped[settings.COL_TA] / df_grouped[settings.COL_TS]) * 100
         
         # Step 3: Total Performance per Cable
         df_total = df_grouped.groupby(settings.COL_CABLE_NAME, as_index=False).agg({
             settings.COL_TS: "sum",
-            settings.COL_TO: "sum"
+            settings.COL_TO: "sum",
+            settings.COL_TA: "sum"
         })
         df_total["Total_Performance (%)"] = (df_total[settings.COL_TO] / df_total[settings.COL_TS]) * 100
+        df_total["Total_Rendement (%)"] = (df_total[settings.COL_TA] / df_total[settings.COL_TS]) * 100
         
         # Replacing NaNs with empty strings for safe JSON serialization
         phase_performance = df_grouped.fillna("").to_dict(orient="records")
@@ -88,8 +130,8 @@ async def upload_file(file: UploadFile = File(...)):
 
         # Step 4: Summary Metrics
         total_cables = int(df_total[settings.COL_CABLE_NAME].nunique())
-        avg_performance = round(float(df_grouped["Performance (%)"].mean()), 2)
-        underperforming = int((df_grouped["Performance (%)"] < 80).sum())
+        avg_performance = round(float(df_grouped["Taux d'adhérence (%)"].mean()), 2)
+        underperforming = int((df_grouped["Taux d'adhérence (%)"] < 80).sum())
         top_cable_row = df_total.loc[df_total["Total_Performance (%)"].idxmax()]
         top_cable = str(top_cable_row[settings.COL_CABLE_NAME])
         top_cable_perf = round(float(top_cable_row["Total_Performance (%)"]), 2)
